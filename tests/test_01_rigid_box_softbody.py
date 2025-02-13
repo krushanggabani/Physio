@@ -26,8 +26,8 @@ engine.add_body(soft_body)
 
 base = [0.5, 0.5]
 link_params = [
-    {'mass': 1, 'length': 0.15, 'angle': -np.pi/2, 'k_rot': 2, 'theta_eq': -np.pi/6},
-    {'mass': 1, 'length': 0.14, 'angle': -np.pi/6, 'k_rot': 2, 'theta_eq': -np.pi/6}
+    {'mass': 1, 'length': 0.2, 'angle': -np.pi/2, 'k_rot': 2, 'theta_eq': -np.pi/6},
+    {'mass': 1, 'length': 0.24, 'angle': -np.pi/6, 'k_rot': 2, 'theta_eq': -np.pi/6}
 ]
 damping_link = 0.25
 arm = RoboticArm(base, link_params)
@@ -39,13 +39,12 @@ while engine.gui_flag:
 
     t = engine.time
 
-    newbase = np.array([0.5,0.5-0.5*t])
+    newbase = np.array([0.5-0.2*np.cos(10*t), 0.45 - 0.15*np.sin(5)])             #[0.5,0.5-0.5*t])      
 
     arm.set_base(newbase)
 
     external_torques = [0 for _ in arm.links]
 
-    print(external_torques)
     link_segments = arm.get_link_segments()
     k_arm = 10000    # collision stiffness for the arm
     link_radius = 0.05
@@ -64,7 +63,6 @@ while engine.gui_flag:
                 torque = r[0] * F_coll[1] - r[1] * F_coll[0]
                 external_torques[seg_index] -= torque
 
-    print(external_torques)
     # Pass external torques to the arm so its update method can use them.
     arm.set_external_torques(external_torques)
 

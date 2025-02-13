@@ -16,6 +16,8 @@ class SoftBody:
         self.height = height
         self.mass_node = mass_node
         self.floor_y = floor_y
+        self.floor_x = [0.1, 0.9]
+
         self.g = g 
         self.k_floor = k_floor
 
@@ -32,6 +34,17 @@ class SoftBody:
                 self.velocities.append(np.array([0, 0], dtype=np.float64))
         self.positions = np.array(self.positions)
         self.velocities = np.array(self.velocities)
+        self.fixed = np.zeros(len(self.positions), dtype=bool)
+        
+        N_nodes = nx * ny
+        self.fixed = np.zeros(N_nodes, dtype=bool)
+        for j in range(ny):
+            left_index = j * nx + 0
+            right_index = j * nx + (nx - 1)
+            self.fixed[left_index] = True
+            self.fixed[right_index] = True
+
+
 
         # Build spring connections: each spring is a dict with i, j, rest_length, k, damping.
         self.springs = []
@@ -102,7 +115,20 @@ class SoftBody:
             if self.positions[i, 1] < self.floor_y:
                 penetration = self.floor_y - self.positions[i, 1]
                 forces[i, 1] += k_floor * penetration
+
+        for i in range(len(self.positions)):
+            if self.positions[i, 0] < self.floor_x[0]:
+                penetration = self.floor_x[0] - self.positions[i, 0]
+                forces[i, 0] += k_floor * penetration
+    
+        for i in range(len(self.positions)):
+            if self.positions[i, 0] > self.floor_x[1]:
+                penetration = self.floor_x[1]- self.positions[i, 0]
+                forces[i, 0] += k_floor * penetration
+
+
         return forces
+
 
     def update(self, dt):
         g  = self.g 
@@ -111,3 +137,5 @@ class SoftBody:
         acceleration = forces / self.mass_node
         self.velocities += acceleration * dt
         self.positions += self.velocities * dt
+
+        self.velocities[self.fixed] = 0
