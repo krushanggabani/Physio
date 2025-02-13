@@ -33,6 +33,7 @@ class SoftBody:
                 self.positions.append(np.array([x0 + i * dx, y0 + j * dy], dtype=np.float64))
                 self.velocities.append(np.array([0, 0], dtype=np.float64))
         self.positions = np.array(self.positions)
+        self.start_pos = self.positions
         self.velocities = np.array(self.velocities)
         self.fixed = np.zeros(len(self.positions), dtype=bool)
         
@@ -136,6 +137,9 @@ class SoftBody:
         forces = self.apply_forces(dt, g, k_floor)
         acceleration = forces / self.mass_node
         self.velocities += acceleration * dt
+
+        self.velocities[self.fixed] = 0
         self.positions += self.velocities * dt
 
         self.velocities[self.fixed] = 0
+        # self.positions[self.fixed] = self.start_pos[self.fixed]

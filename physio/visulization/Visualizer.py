@@ -34,7 +34,7 @@ class Visualizer:
         
 
         self.gui.text(f"Time: {t:.3f}s", (0.05, 0.95), font_size=24, color=0xFFFFFF)
-        self.gui.show()
+        # self.gui.show()
         
 
 

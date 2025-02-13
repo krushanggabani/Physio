@@ -6,25 +6,30 @@ from physio.SimulationEngine import *
 from physio.bodies.SoftBody import *
 from physio.bodies.Robot_Arm import *
 from physio.collision.detect_collision import *
+from physio.visulization.recorder import *
+
 
 # Initialize Taichi (change arch if needed)
 ti.init(arch=ti.cpu)
 
 
+# record_setting = {'record_flag' : True,} 
 
 engine = SimulationEngine()
+
+
 
 
 nx, ny = 25, 5
 width, height = 0.75, 0.25
 mass_node = 0.01
-spring_params = {'h_k': 100, 'v_k': 1000, 'd_k': 1000, 'd_struct': 0.5}
+spring_params = {'h_k': 100, 'v_k': 100, 'd_k': 1000, 'd_struct': 0.5}
 soft_body = SoftBody(nx, ny, width, height, mass_node, spring_params,floor_y=0,g = 9.81, k_floor=10000)
 engine.add_body(soft_body)
 
 
 
-base = [0.5, 0.5]
+base = [0.7, 0.4]
 link_params = [
     {'mass': 1, 'length': 0.2, 'angle': -np.pi/2, 'k_rot': 2, 'theta_eq': -np.pi/6},
     {'mass': 1, 'length': 0.24, 'angle': -np.pi/6, 'k_rot': 2, 'theta_eq': -np.pi/6}
@@ -39,7 +44,7 @@ while engine.gui_flag:
 
     t = engine.time
 
-    newbase = np.array([0.5-0.2*np.cos(10*t), 0.45 - 0.15*np.sin(5)])             #[0.5,0.5-0.5*t])      
+    newbase = np.array([0.5-0.2*np.cos(10*t), 0.6 - 0.15*np.sin(5*t)])             #[0.5,0.5-0.5*t])      
 
     arm.set_base(newbase)
 
@@ -67,4 +72,7 @@ while engine.gui_flag:
     arm.set_external_torques(external_torques)
 
     engine.update()
-    
+
+
+
+engine.recorder.save()
