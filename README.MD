@@ -1,6 +1,5 @@
 # Physio
 
-![Build Status](https://img.shields.io/github/actions/workflow/status/<username>/physio/ci.yml?branch=main&style=flat)&nbsp;![Python Version](https://img.shields.io/pypi/pyversions/physio?style=flat)&nbsp;![License](https://img.shields.io/github/license/<username>/physio?style=flat)
 
 A modular, high-performance toolkit for **Modeling and Simulation of Soft Tissue** using the Material Point Method (MPM), designed to study and optimize robot–tissue interaction dynamics in surgical robotics and haptic applications.
 
