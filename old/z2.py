@@ -153,7 +153,7 @@ def substep():
                and pos[1] >= to_box[None][1] and pos[1] <= from_box[None][1])
         
         inside_roller = (roller_center[None]-pos).norm() <= roller_radius[None]
-        print((roller_center[None]-pos).norm())
+        print((roller_center[None]-pos))
         grid_A[i, j] = 1 if inside | inside_roller else 0
         col[None] = col[None] | grid_A[i, j]
     
