@@ -1,0 +1,9 @@
+# Virtual environment
+physioenv/
+
+# Distribution / packaging
+*.egg-info/
+
+# Ignoring specified data directories
+data/
+video/
