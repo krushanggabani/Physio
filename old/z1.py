@@ -7,7 +7,7 @@ ti.init(arch=ti.gpu)
 
 # Simulation resolution
 quality = 1
-n_particles = 50000 * quality ** 2
+n_particles = 30000 * quality ** 2
 n_grid = 128 * quality *2
 
 dx = 1 / n_grid
@@ -64,7 +64,7 @@ for i in ti.static(range(9)):
     coeff_b[i] = b_list[i]
 w0[None] = 21.689
 
-amplitude = 0.2
+amplitude = 0.075
 omega     = 10
 
 # Roller parameters (attached to box)
@@ -97,8 +97,8 @@ def initialize():
     # Rigid-box initial velocity (downwards)
     r_vel[None] = [0.0, 0.0]
     # Rigid-box initial corners (axis-aligned)
-    to_box[None] = [0.48, 0.5]   # lower-left corner
-    from_box[None] = [0.52, 0.7] # upper-right corner
+    to_box[None] = [0.48, 0.3]   # lower-left corner
+    from_box[None] = [0.52, 0.5] # upper-right corner
 
     # Attach roller just below the box
     roller_radius[None] = 0.025
@@ -121,6 +121,8 @@ def substep():
     roller_angvel[None] = r_vel[None][0] / (roller_radius[None] + eps)
     roller_angle[None] += roller_angvel[None] * dt
 
+
+    collision_impulse = ti.Vector.zero(self.dtype, 3)
     # Build active-mask: mark grid nodes inside the box
     for i, j in grid_A:
         pos = ti.Vector([i, j]) * dx

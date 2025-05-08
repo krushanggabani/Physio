@@ -7,7 +7,7 @@ ti.init(arch=ti.gpu)
 
 # Simulation resolution
 quality     = 1
-n_particles = 50000 * quality ** 2
+n_particles = 30000 * quality ** 2
 n_grid      = 128 * quality * 2
 
 dx     = 1 / n_grid
@@ -112,16 +112,16 @@ def substep():
     # Advance time
     t[None] += dt
 
-    if col[None] ==0 :
-        v_y = -amplitude*omega *(ti.sin(omega * t[None]))
-        r_vel[None]   = ti.Vector([0.0, v_y])
-        to_box[None] += r_vel[None] * dt
-        from_box[None] += r_vel[None] * dt
-    else:
-        v_y = -amplitude*omega *(ti.sin(omega * t[None]))
-        r_vel[None]   = ti.Vector([0.0, 0.0])
-        to_box[None] += r_vel[None] * dt
-        from_box[None] += r_vel[None] * dt
+    # if col[None] ==0 :
+    v_y = -amplitude*omega *(ti.sin(omega * t[None]))
+    r_vel[None]   = ti.Vector([0.0, v_y])
+    to_box[None] += r_vel[None] * dt
+    from_box[None] += r_vel[None] * dt
+    # # else:
+    # v_y = -amplitude*omega *(ti.sin(omega * t[None]))
+    # r_vel[None]   = ti.Vector([0.0, 0.0])
+    # to_box[None] += r_vel[None] * dt
+    # from_box[None] += r_vel[None] * dt
 
         # old_to_y = to_box[None][1]
         # to_box[None][0]   += h_speed * dt
@@ -153,7 +153,7 @@ def substep():
                and pos[1] >= to_box[None][1] and pos[1] <= from_box[None][1])
         
         inside_roller = (roller_center[None]-pos).norm() <= roller_radius[None]
-        print((roller_center[None]-pos))
+        # print((roller_center[None]-pos))
         grid_A[i, j] = 1 if inside | inside_roller else 0
         col[None] = col[None] | grid_A[i, j]
     
@@ -168,10 +168,10 @@ def substep():
     # P2G
     for p in range(n_particles):
         base = (x[p] * inv_dx - 0.5).cast(int)
-        if base[0] < 0 | base[1] < 0 | base[0] > n_grid-3 | base[1] >n_grid-3:  
-            print(base)
-        base[0] = ti.max(0, ti.min(base[0], n_grid - 3))
-        base[1] = ti.max(0, ti.min(base[1], n_grid - 3))
+        # if base[0] < 0 | base[1] < 0 | base[0] > n_grid-3 | base[1] >n_grid-3:  
+            # print(base)
+        # base[0] = ti.max(0, ti.min(base[0], n_grid - 3))
+        # base[1] = ti.max(0, ti.min(base[1], n_grid - 3))
         fx = x[p] * inv_dx - base.cast(float)
         w = [0.5 * (1.5 - fx)**2,
              0.75     - (fx - 1.0)**2,
@@ -216,10 +216,10 @@ def substep():
     for p in range(n_particles):
         base = (x[p] * inv_dx - 0.5).cast(int)
 
-        if base[0] < 0 | base[1] < 0 | base[0] > n_grid-3 | base[1] >n_grid-3:  
-            print(base)
-        base[0] = ti.max(0, ti.min(base[0], n_grid - 3))
-        base[1] = ti.max(0, ti.min(base[1], n_grid - 3))
+        # if base[0] < 0 | base[1] < 0 | base[0] > n_grid-3 | base[1] >n_grid-3:  
+        #     print(base)
+        # base[0] = ti.max(0, ti.min(base[0], n_grid - 3))
+        # base[1] = ti.max(0, ti.min(base[1], n_grid - 3))
         fx = x[p] * inv_dx - base.cast(float)
         w = [0.5 * (1.5 - fx)**2,
              0.75     - (fx - 1.0)**2,
