@@ -7,4 +7,4 @@ physioenv/
 # Ignoring specified data directories
 data/
 video/
-taichi_examples/
+# taichi_examples/
