@@ -122,7 +122,7 @@ def substep():
     roller_angle[None] += roller_angvel[None] * dt
 
 
-    collision_impulse = ti.Vector.zero(self.dtype, 3)
+    # collision_impulse = ti.Vector.zero(self.dtype, 3)
     # Build active-mask: mark grid nodes inside the box
     for i, j in grid_A:
         pos = ti.Vector([i, j]) * dx

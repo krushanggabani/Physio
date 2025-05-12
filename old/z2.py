@@ -165,8 +165,10 @@ def substep():
         grid_m[i, j] = 0.0
         grid_f[i, j] = [0.0, 0.0]
 
+    
     # P2G
     for p in range(n_particles):
+
         base = (x[p] * inv_dx - 0.5).cast(int)
         # if base[0] < 0 | base[1] < 0 | base[0] > n_grid-3 | base[1] >n_grid-3:  
             # print(base)
@@ -178,6 +180,7 @@ def substep():
              0.5 * (fx - 0.5)**2]
         F[p] = (ti.Matrix.identity(float, 2) + dt * C[p]) @ F[p]
         U, sigma, V = ti.svd(F[p])
+
         P_el   = 2 * (E_e/2) * (F[p] - U @ V.transpose()) @ F[p].transpose()
         P_visc = 2 * (E_v/2) * (F[p] - U @ V.transpose()) @ F[p].transpose()
         S_v[p] += dt * (P_visc - S_v[p]) / tau_relax
