@@ -8,3 +8,5 @@ physioenv/
 data/
 video/
 # taichi_examples/
+
+softmac/
