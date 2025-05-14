@@ -7,8 +7,6 @@ physioenv/
 # Ignoring specified data directories
 data/
 video/
+# taichi_examples/
 
-
-# example folder
 softmac/
-
