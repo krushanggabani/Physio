@@ -31,8 +31,8 @@ engine.add_body(soft_body)
 
 base = [0.7, 0.4]
 link_params = [
-    {'mass': 1, 'length': 0.2, 'angle': -np.pi/2, 'k_rot': 2, 'theta_eq': -np.pi/6},
-    {'mass': 1, 'length': 0.24, 'angle': -np.pi/6, 'k_rot': 2, 'theta_eq': -np.pi/6}
+    {'mass': 1, 'length': 0.1, 'angle': 0, 'k_rot': 2, 'theta_eq': 0*-np.pi/6},
+    {'mass': 1, 'length': 0.15, 'angle': 0, 'k_rot': 2, 'theta_eq': 0*-np.pi/6}
 ]
 damping_link = 0.25
 arm = RoboticArm(base, link_params)
@@ -44,7 +44,7 @@ while engine.gui_flag:
 
     t = engine.time
 
-    newbase = np.array([0.5-0.2*np.cos(10*t), 0.6 - 0.15*np.sin(5*t)])             #[0.5,0.5-0.5*t])      
+    newbase = np.array([0.5, 0.6 - 0.15*np.sin(5*t)])             #[0.5,0.5-0.5*t])      
 
     arm.set_base(newbase)
 

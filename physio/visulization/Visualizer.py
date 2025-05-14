@@ -29,6 +29,8 @@ class Visualizer:
 
                  # Draw robotic arm links as thick lines
                 for A, B in body.get_link_segments():
+                    print(A)
+                    print(B)
                 #     self.gui.line(begin=A, end=B, radius=3, color=0x00FF00)
                     draw_link_with_thickness(self.gui, A, B, 0.05, color=0x00FF00)
         

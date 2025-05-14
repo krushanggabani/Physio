@@ -42,5 +42,5 @@ for t in range(num_frames):
     gui.show()
 
 # Save animation
-imageio.mimsave("circular_motion.gif", frames, fps=30)
+imageio.mimsave("circular_motion02.gif", frames, fps=30)
 print("Animation saved as circular_motion.gif")

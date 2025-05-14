@@ -5,5 +5,10 @@ physioenv/
 *.egg-info/
 
 # Ignoring specified data directories
-records/data/
-records/video/
+data/
+video/
+
+
+# example folder
+softmac/
+
