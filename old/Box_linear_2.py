@@ -225,8 +225,8 @@ frames = []
 gui = ti.GUI("MPM with Rigid Box", res=800, background_color=0x112F41)
 
 while not gui.get_event(ti.GUI.ESCAPE, ti.GUI.EXIT):
-    # for _ in range(int(2e-3 // dt)):
-        # substep()
+    for _ in range(int(2e-3 // dt)):
+        substep()
     # Draw particles
     gui.circles(x.to_numpy(), radius=1.5, color=0x068587)
     # Draw rigid box with topleft/bottomright

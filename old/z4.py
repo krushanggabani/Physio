@@ -145,27 +145,27 @@ def collide_impulse(p_i):
 
 
 @ti.kernel
-    def clear_grid():
-        zero = ti.Vector.zero(dtype, dim)
-        for I in ti.grouped(grid_m):
-            grid_v_in[I] = zero
-            grid_v_out[I] = zero
-            grid_m[I] = 0
+def clear_grid():
+    zero = ti.Vector.zero(dtype, dim)
+    for I in ti.grouped(grid_m):
+        grid_v_in[I] = zero
+        grid_v_out[I] = zero
+        grid_m[I] = 0
 
-            grid_v_in.grad[I] = zero
-            grid_v_out.grad[I] = zero
-            grid_m.grad[I] = 0
+        grid_v_in.grad[I] = zero
+        grid_v_out.grad[I] = zero
+        grid_m.grad[I] = 0
 
-            if ti.static(collision_type == CONTACT_MIXED):
-                grid_v_mixed[I] = zero
-                grid_v_mixed.grad[I] = zero
+        if ti.static(collision_type == CONTACT_MIXED):
+            grid_v_mixed[I] = zero
+            grid_v_mixed.grad[I] = zero
 
-        for p in range(0, n_particles):
-            if ti.static(collision_type == CONTACT_MIXED):
-                v_tmp[p] = zero
-                v_tmp.grad[p] = zero
-                v_tgt[p] = zero
-                v_tgt.grad[p] = zero
+    for p in range(0, n_particles):
+        if ti.static(collision_type == CONTACT_MIXED):
+            v_tmp[p] = zero
+            v_tmp.grad[p] = zero
+            v_tgt[p] = zero
+            v_tgt.grad[p] = zero
 
 @ti.kernel
 def substep():
