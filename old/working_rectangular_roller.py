@@ -33,8 +33,8 @@ contact_height = ti.field(ti.f32, shape=())
 contact_force  = ti.field(ti.f32, shape=())
 
 # Speeds
-v_desc = 1  # vertical descent m/s
-v_roll = 1  # horizontal roll m/s
+v_desc = 2  # vertical descent m/s
+v_roll = 2  # horizontal roll m/s
 
 # Floor parameters
 floor_level    = 0.0       # y = 0
