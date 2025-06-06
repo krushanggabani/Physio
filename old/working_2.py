@@ -1,175 +1,311 @@
 import taichi as ti
 import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.animation as animation
 
-ti.init(arch=ti.gpu)
+ti.init(arch=ti.vulkan)
 
-# ─── Simulation Parameters ───────────────────────────────────────────────
-dim = 2
-n_particles = 4000
-n_grid = 128
-dx = 1 / n_grid
-inv_dx = float(n_grid)
-dt = 2e-4
-p_vol = (dx * 0.5)**2
-p_rho = 1
-p_mass = p_vol * p_rho
-E = 400
-nu = 0.2
-mu_0 = E / (2 * (1 + nu))
-la_0 = E * nu / ((1 + nu) * (1 - 2 * nu))
+@ti.data_oriented
+class SoftBodyMPM:
+    def __init__(self, n_particles=20000, n_grid=128, material_props=None, floor_level=0.0,
+                 floor_friction=0.4, roller_radius=0.025):
+        # Simulation parameters
+        self.dim = 2
+        self.n_particles = n_particles
+        self.n_grid = n_grid
+        self.dx = 1.0 / n_grid
+        self.inv_dx = float(n_grid)
+        self.dt = 2e-4
+        # Material (Neo‐Hookean)
+        if material_props is None:
+            E = 5e4
+            nu = 0.2
+            mu_0 = E / (2 * (1 + nu))
+            lambda_0 = E * nu / ((1 + nu) * (1 - 2 * nu))
+        else:
+            mu_0 = material_props['mu']
+            lambda_0 = material_props['lambda']
+        self.mu_0 = mu_0
+        self.lambda_0 = lambda_0
+        self.p_rho = 1.0
+        self.p_vol = (self.dx * 0.5) ** 2
+        self.p_mass = self.p_rho * self.p_vol
+        # Floor & boundary
+        self.floor_level = floor_level
+        self.floor_friction = floor_friction
+        # Roller/contact
+        self.roller_radius = roller_radius
+        # Fields
+        self.x = ti.Vector.field(self.dim, dtype=ti.f32, shape=self.n_particles)
+        self.v = ti.Vector.field(self.dim, dtype=ti.f32, shape=self.n_particles)
+        self.F = ti.Matrix.field(self.dim, self.dim, dtype=ti.f32, shape=self.n_particles)
+        self.C = ti.Matrix.field(self.dim, self.dim, dtype=ti.f32, shape=self.n_particles)
+        self.J = ti.field(dtype=ti.f32, shape=self.n_particles)
+        self.grid_v = ti.Vector.field(self.dim, dtype=ti.f32, shape=(self.n_grid, self.n_grid))
+        self.grid_m = ti.field(dtype=ti.f32, shape=(self.n_grid, self.n_grid))
+        self.roller_center = ti.Vector.field(self.dim, dtype=ti.f32, shape=1)
+        self.roller_velocity = ti.Vector.field(self.dim, dtype=ti.f32, shape=1)
+        self.contact_force_vec = ti.Vector.field(self.dim, dtype=ti.f32, shape=1)
+        # Initialize
+        self.init_particles()
 
-# ─── Passive Robot Arm Model ─────────────────────────────────────────────
-link_length = 0.2
-base_pos = ti.Vector([0.6, 0.6])
-rest_angles = [np.pi / 4, -np.pi / 3]
-spring_k = 20.0
-damping_b = 0.5
+    @ti.func
+    def neo_hookean_stress(self, F_i):
+        J_det = F_i.determinant()
+        FinvT = F_i.inverse().transpose()
+        return self.mu_0 * (F_i - FinvT) + self.lambda_0 * ti.log(J_det) * FinvT
 
-theta1 = ti.field(dtype=ti.f32, shape=())
-theta2 = ti.field(dtype=ti.f32, shape=())
-omega1 = ti.field(dtype=ti.f32, shape=())
-omega2 = ti.field(dtype=ti.f32, shape=())
+    @ti.kernel
+    def init_particles(self):
+        for p in range(self.n_particles):
+            self.x[p] = [0.3 + ti.random() * 0.4, ti.random() * 0.2]
+            self.v[p] = [0.0, 0.0]
+            self.F[p] = ti.Matrix.identity(ti.f32, self.dim)
+            self.J[p] = 1.0
+            self.C[p] = ti.Matrix.zero(ti.f32, self.dim, self.dim)
+        # Roller initial placement (updated externally by RobotArm)
+        self.roller_center[0] = ti.Vector([0.0, 0.0])
+        self.roller_velocity[0] = ti.Vector([0.0, 0.0])
+        self.contact_force_vec[0] = ti.Vector([0.0, 0.0])
 
-# ─── MPM Fields ──────────────────────────────────────────────────────────
-x = ti.Vector.field(dim, dtype=ti.f32, shape=n_particles)
-v = ti.Vector.field(dim, dtype=ti.f32, shape=n_particles)
-F = ti.Matrix.field(dim, dim, dtype=ti.f32, shape=n_particles)
-C = ti.Matrix.field(dim, dim, dtype=ti.f32, shape=n_particles)
-Jp = ti.field(dtype=ti.f32, shape=n_particles)
-contact_force = ti.Vector.field(dim, dtype=ti.f32, shape=n_particles)
+    @ti.kernel
+    def p2g(self):
+        for I in ti.grouped(self.grid_m):
+            self.grid_v[I] = ti.Vector.zero(ti.f32, self.dim)
+            self.grid_m[I] = 0.0
+        for p in range(self.n_particles):
+            Xp = self.x[p] * self.inv_dx
+            base = ti.cast(Xp - 0.5, ti.i32)
+            fx = Xp - base.cast(ti.f32)
+            w = [0.5 * (1.5 - fx)**2,
+                 0.75 - (fx - 1.0)**2,
+                 0.5 * (fx - 0.5)**2]
+            stress = (-self.dt * self.p_vol * 4 * self.inv_dx * self.inv_dx) * self.neo_hookean_stress(self.F[p])
+            affine = stress + self.p_mass * self.C[p]
+            for i, j in ti.static(ti.ndrange(3, 3)):
+                offs = ti.Vector([i, j])
+                dpos = (offs.cast(ti.f32) - fx) * self.dx
+                wt = w[i].x * w[j].y
+                self.grid_v[base + offs] += wt * (self.p_mass * self.v[p] + affine @ dpos)
+                self.grid_m[base + offs] += wt * self.p_mass
 
-grid_v = ti.Vector.field(dim, dtype=ti.f32, shape=(n_grid, n_grid))
-grid_m = ti.field(dtype=ti.f32, shape=(n_grid, n_grid))
+    @ti.kernel
+    def apply_forces_and_detect(self):
+        self.contact_force_vec[0] = ti.Vector.zero(ti.f32, self.dim)
+        for I in ti.grouped(self.grid_m):
+            m = self.grid_m[I]
+            if m > 0:
+                v_old = self.grid_v[I] / m
+                v_new = v_old + self.dt * ti.Vector([0.0, -9.8])
+                pos = I.cast(ti.f32) * self.dx
+                # Roller: normal-only sliding
+                rel = pos - self.roller_center[0]
+                if rel.norm() < self.roller_radius:
+                    rv = self.roller_velocity[0]
+                    n = rel.normalized()
+                    v_norm = n * n.dot(rv)
+                    v_tan = v_old - n * (n.dot(v_old))
+                    v_new = v_tan + v_norm
+                    delta_v = v_new - v_old
+                    f_imp = m * delta_v / self.dt
+                    self.contact_force_vec[0] += f_imp
+                # Floor: clamp vertical & horizontal
+                if pos.y < self.floor_level + self.dx:
+                    if v_new.y < 0:
+                        v_new.y = 0
+                    v_new.x = 0
+                # Walls: clamp horizontal
+                if pos.x < self.dx:
+                    v_new.x = 0
+                if pos.x > 1 - self.dx:
+                    v_new.x = 0
+                self.grid_v[I] = v_new * m
 
-@ti.kernel
-def initialize():
-    for i in range(n_particles):
-        x[i] = [ti.random() * 0.4 + 0.3, ti.random() * 0.2 + 0.1]
-        v[i] = [0, 0]
-        F[i] = ti.Matrix.identity(ti.f32, dim)
-        Jp[i] = 1
-    theta1[None] = rest_angles[0]
-    theta2[None] = rest_angles[1]
+    @ti.kernel
+    def g2p(self):
+        for p in range(self.n_particles):
+            Xp = self.x[p] * self.inv_dx
+            base = ti.cast(Xp - 0.5, ti.i32)
+            fx = Xp - base.cast(ti.f32)
+            w = [0.5 * (1.5 - fx)**2,
+                 0.75 - (fx - 1.0)**2,
+                 0.5 * (fx - 0.5)**2]
+            new_v = ti.Vector.zero(ti.f32, self.dim)
+            new_C = ti.Matrix.zero(ti.f32, self.dim, self.dim)
+            for i, j in ti.static(ti.ndrange(3, 3)):
+                offs = ti.Vector([i, j])
+                dpos = (offs.cast(ti.f32) - fx) * self.dx
+                wt = w[i].x * w[j].y
+                # Guarantee gv is always defined:
+                grid_m_val = self.grid_m[base + offs]
+                gv = ti.Vector.zero(ti.f32, self.dim)
+                if grid_m_val > 0:
+                    gv = self.grid_v[base + offs] / grid_m_val
+                else:
+                    gv = ti.Vector.zero(ti.f32, self.dim)
 
-@ti.func
-def get_arm_joints():
-    joint1 = base_pos
-    joint2 = joint1 + link_length * ti.Vector([ti.cos(theta1[None]), ti.sin(theta1[None])])
-    tip = joint2 + link_length * ti.Vector([ti.cos(theta1[None] + theta2[None]), ti.sin(theta1[None] + theta2[None])])
-    return joint1, joint2, tip
+                new_v += wt * gv
+                new_C += 4 * self.inv_dx * wt * gv.outer_product(dpos)
 
-@ti.kernel
-def update_arm():
-    torque1 = -spring_k * (theta1[None] - rest_angles[0]) - damping_b * omega1[None]
-    torque2 = -spring_k * (theta2[None] - rest_angles[1]) - damping_b * omega2[None]
-    omega1[None] += torque1 * dt
-    omega2[None] += torque2 * dt
-    theta1[None] += omega1[None] * dt
-    theta2[None] += omega2[None] * dt
+            self.v[p] = new_v
+            self.C[p] = new_C
+            self.x[p] += self.dt * new_v
 
-@ti.func
-def robot_arm_force(pos):
-    joint1, joint2, tip = get_arm_joints()
-    f = ti.Vector([0.0, 0.0])
-    for joint in [joint1, joint2, tip]:
-        r = pos - joint
-        dist = r.norm()
-        if dist < 0.05:
-            normal = r.normalized()
-            penetration = 0.05 - dist
-            f += 3000 * penetration * normal - 10 * normal
-    return f
+            # Floor: enforce constraints
+            if self.x[p].y < self.floor_level:
+                self.x[p].y = self.floor_level
+                self.v[p].y = 0
+                self.v[p].x = 0
+            # Walls:
+            if self.x[p].x < self.dx:
+                self.x[p].x = self.dx
+                self.v[p].x = 0
+            if self.x[p].x > 1 - self.dx:
+                self.x[p].x = 1 - self.dx
+                self.v[p].x = 0
+            if self.x[p].y > 1 - self.dx:
+                self.x[p].y = 1 - self.dx
+                self.v[p].y = 0
 
-@ti.kernel
-def substep(t: ti.f32):
-    for i, j in grid_m:
-        grid_v[i, j] = [0, 0]
-        grid_m[i, j] = 0
+            self.F[p] = (ti.Matrix.identity(ti.f32, self.dim) + self.dt * new_C) @ self.F[p]
+            self.J[p] = self.F[p].determinant()
 
-    for p in range(n_particles):
-        base = (x[p] * inv_dx - 0.5).cast(int)
-        fx = x[p] * inv_dx - base.cast(float)
-        w = [0.5 * (1.5 - fx)**2, 0.75 - (fx - 1.0)**2, 0.5 * (fx - 0.5)**2]
 
-        F[p] = (ti.Matrix.identity(ti.f32, dim) + dt * C[p]) @ F[p]
-        h = ti.exp(10 * (1.0 - Jp[p]))
-        mu, la = mu_0 * h, la_0 * h
+class RobotArm:
+    def __init__(self, L1=0.12, L2=0.10, k1=5.0, k2=5.0, b1=2.0, b2=2.0,
+                 base_x=0.4, y0=0.4, A=0.1, omega=0.5):
+        # Geometry
+        self.L1 = L1
+        self.L2 = L2
+        # Joint states
+        self.theta1 = np.array([np.pi/15], dtype=np.float32)
+        self.theta2 = np.array([0.0], dtype=np.float32)
+        self.dtheta1 = np.zeros(1, dtype=np.float32)
+        self.dtheta2 = np.zeros(1, dtype=np.float32)
+        self.theta1_rest = self.theta1.copy()
+        self.theta2_rest = self.theta2.copy()
+        # Passive spring-damper
+        self.k1 = k1
+        self.k2 = k2
+        self.b1 = b1
+        self.b2 = b2
+        self.I1 = L1**2 / 12.0
+        self.I2 = L2**2 / 12.0
+        # Base motion
+        self.base_x = base_x
+        self.y0 = y0
+        self.A = A
+        self.omega = omega
+        self.base_y = y0
+        self.time_t = 0.0
 
-        U, sig, V = ti.svd(F[p])
-        J = 1.0
-        for d in ti.static(range(dim)):
-            J *= sig[d, d]
+    def forward_kinematics(self):
+        base = np.array([self.base_x, self.base_y], dtype=np.float32)
+        j2 = base + np.array([np.sin(self.theta1[0]), -np.cos(self.theta1[0])]) * self.L1
+        ee = j2 + np.array([np.sin(self.theta1[0] + self.theta2[0]),
+                            -np.cos(self.theta1[0] + self.theta2[0])]) * self.L2
+        return base, j2, ee
 
-        stress = 2 * mu * (F[p] - U @ V.transpose()) @ F[p].transpose() + \
-                 ti.Matrix.identity(ti.f32, dim) * la * J * (J - 1)
-        stress = (-dt * p_vol * 4 * inv_dx * inv_dx) * stress
-        affine = stress + p_mass * C[p]
+    def update(self, dt, contact_force):
+        # 1) update base vertical motion
+        self.time_t += dt * 15
+        self.base_y = self.y0 + self.A * np.cos(self.omega * self.time_t)
+        # 2) read contact force
+        Fc = contact_force
+        base, j2, ee_old = self.forward_kinematics()
+        # 3) compute new end-effector position
+        j2 = base + np.array([np.sin(self.theta1[0]), -np.cos(self.theta1[0])]) * self.L1
+        ee_new = j2 + np.array([np.sin(self.theta1[0] + self.theta2[0]),
+                                -np.cos(self.theta1[0] + self.theta2[0])]) * self.L2
+        rv = (ee_new - ee_old) / dt
+        # 4) update roller state externally by Simulation
+        # 5) compute torques
+        r1 = ee_new - base
+        r2 = ee_new - j2
+        tau1_c = r1[1] * Fc[0] - r1[0] * Fc[1]
+        tau2_c = r2[1] * Fc[0] - r2[0] * Fc[1]
+        tau1 = 2 * tau1_c - self.k1 * (self.theta1[0] - self.theta1_rest[0]) - self.b1 * self.dtheta1[0]
+        tau2 = 5 * tau2_c - self.k2 * (self.theta2[0] - self.theta2_rest[0]) - self.b2 * self.dtheta2[0]
+        # 6) integrate
+        alpha1 = tau1 / self.I1
+        alpha2 = tau2 / self.I2
+        self.dtheta1[0] += alpha1 * dt
+        self.theta1[0] += self.dtheta1[0] * dt
+        self.dtheta2[0] += alpha2 * dt
+        self.theta2[0] += self.dtheta2[0] * dt
+        return ee_new, rv
 
-        for i in ti.static(range(3)):
-            for j in ti.static(range(3)):
-                offset = ti.Vector([i, j])
-                dpos = (offset.cast(float) - fx) * dx
-                weight = w[i][0] * w[j][1]
-                grid_v[base + offset] += weight * (p_mass * v[p] + affine @ dpos)
-                grid_m[base + offset] += weight * p_mass
 
-    for i, j in grid_m:
-        if grid_m[i, j] > 0:
-            grid_v[i, j] = grid_v[i, j] / grid_m[i, j]
-            grid_v[i, j][1] -= dt * 9.8
-            if i < 3 or i > n_grid - 3 or j < 3:
-                grid_v[i, j] = [0, 0]
+@ti.data_oriented
+class Simulation:
+    def __init__(self):
+        # Instantiate soft body and robot arm
+        self.soft_body = SoftBodyMPM()
+        self.robot = RobotArm()
+        # GUI
+        self.gui = ti.GUI('MPM + Passive 2-Link Arm', res=(512, 512))
+        # Initialize roller from FK
+        base, j2, ee = self.robot.forward_kinematics()
+        self.soft_body.roller_center[0] = ee.tolist()
+        self.soft_body.roller_velocity[0] = [0.0, 0.0]
 
-    for p in range(n_particles):
-        base = (x[p] * inv_dx - 0.5).cast(int)
-        fx = x[p] * inv_dx - base.cast(float)
-        w = [0.5 * (1.5 - fx)**2, 0.75 - (fx - 1.0)**2, 0.5 * (fx - 0.5)**2]
+    def step(self):
+        # MPM P2G -> grid forces -> G2P
+        self.soft_body.p2g()
+        self.soft_body.apply_forces_and_detect()
+        self.soft_body.g2p()
+        # Update robot with contact
+        Fc = self.soft_body.contact_force_vec[0].to_numpy()
+        ee_new, rv = self.robot.update(self.soft_body.dt, Fc)
+        # Update roller in soft body
+        self.soft_body.roller_center[0] = ee_new.tolist()
+        self.soft_body.roller_velocity[0] = rv.tolist()
 
-        new_v = ti.Vector.zero(ti.f32, dim)
-        new_C = ti.Matrix.zero(ti.f32, dim, dim)
-        for i in ti.static(range(3)):
-            for j in ti.static(range(3)):
-                offset = ti.Vector([i, j])
-                dpos = (offset.cast(float) - fx) * dx
-                g_v = grid_v[base + offset]
-                weight = w[i][0] * w[j][1]
-                new_v += weight * g_v
-                new_C += 4 * inv_dx * weight * g_v.outer_product(dpos)
+    def run(self):
+        # Main loop
+        while self.gui.running:
+            for _ in range(15):
+                self.step()
+            self.render()
+            self.gui.show()
 
-        frc = robot_arm_force(x[p])
-        contact_force[p] = frc
-        new_v += dt * frc / p_mass
+    def render(self):
+        # Draw particles
+        self.gui.circles(self.soft_body.x.to_numpy(), radius=1.5, color=0x66CCFF)
+        # Draw arm & roller
+        base, j2, ee = self.robot.forward_kinematics()
+        self.gui.line(begin=base, end=j2, radius=2, color=0x000050)
+        self.gui.line(begin=j2, end=ee, radius=2, color=0x000050)
+        self.gui.circle(base, radius=4, color=0xFF0000)
+        self.gui.circle(j2, radius=4, color=0xFF0000)
+        self.gui.circle(ee, radius=int(self.soft_body.roller_radius * 512), color=0xFF0000)
+        self.gui.text(f'Force: {self.soft_body.contact_force_vec[0]} N', pos=(0.02, 0.95), color=0xFFFFFF)
 
-        v[p] = new_v
-        x[p] += dt * v[p]
-        C[p] = new_C
 
-initialize()
-positions = []
-forces = []
+# Built‐in tests for floor + energy
+def test_floor_constraint():
+    sim = Simulation()
+    for _ in range(100):
+        sim.step()
+    xs = sim.soft_body.x.to_numpy()
+    assert np.all(xs[:, 1] >= sim.soft_body.floor_level - 1e-5), "Floor constraint violated"
+    print("Floor constraint test passed.")
 
-for frame in range(300):
-    update_arm()
-    substep(frame * dt)
-    if frame % 5 == 0:
-        positions.append(x.to_numpy())
-        force_mags = np.linalg.norm(contact_force.to_numpy(), axis=1)
-        forces.append(force_mags)
 
-fig, ax = plt.subplots()
-sc = ax.scatter([], [], c=[], cmap='hot', s=1, vmin=0, vmax=10)
-ax.set_xlim(0, 1)
-ax.set_ylim(0, 1)
-ax.set_aspect('equal')
-cb = plt.colorbar(sc, ax=ax, label='Contact Force (N)')
+def test_energy_non_negative():
+    sim = Simulation()
+    for _ in range(100):
+        sim.step()
+        Fc = sim.soft_body.contact_force_vec[0].to_numpy()
+        assert np.linalg.norm(Fc) >= 0, "Negative contact force norm"
+    print("Energy/contact force test passed.")
 
-def update(f):
-    sc.set_offsets(positions[f])
-    sc.set_array(forces[f])
-    return sc,
 
-ani = animation.FuncAnimation(fig, update, frames=len(positions), interval=50)
-plt.title("Human-Robot Massage Simulation (Force Visualization)")
-plt.show()
+def run_tests():
+    test_floor_constraint()
+    test_energy_non_negative()
+
+
+if __name__ == '__main__':
+    # Run the two built‐in tests, then launch GUI
+    run_tests()
+    sim = Simulation()
+    sim.run()

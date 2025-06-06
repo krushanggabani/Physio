@@ -36,8 +36,8 @@ theta2_rest  = theta2.copy()
 
 k1, k2       = 5, 5   # compliant springs
 b1, b2       = 2.0, 2.0   # damping
-I1           = L1**2 / 3.0
-I2           = L2**2 / 3.0
+I1           = L1**2 / 12.0
+I2           = L2**2 / 12.0
 
 # ─── Moving base (x fixed at 0.5, y sinusoidal) ────────────────────────────
 base_x       = 0.4
@@ -261,5 +261,7 @@ while gui.running:
     gui.circle(base_pt, radius=4, color=0xFF0000)
     gui.circle(j2,      radius=4, color=0xFF0000)
     gui.circle(ee,      radius=int(roller_radius * 512), color=0xFF0000)
-
+    gui.text(f'Phase: {"Rolling"}   '
+             f'Force: {contact_force_vec[0]} N',
+             pos=(0.02, 0.95), color=0xFFFFFF)
     gui.show()
