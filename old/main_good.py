@@ -1,8 +1,6 @@
 import taichi as ti
 import numpy as np
 
-
-# approved by professor.
 # ─── Taichi init ───────────────────────────────────────────────────────────
 ti.init(arch=ti.vulkan)
 
@@ -15,13 +13,15 @@ inv_dx      = float(n_grid)
 dt          = 2e-4
 
 # ─── Material (Neo‐Hookean) ────────────────────────────────────────────────
-p_rho   = 1.0
-p_vol   = (dx * 0.5)**2
-p_mass  = p_rho * p_vol
-E       = 5.65e4
-nu      = 0.185
-mu_0    = E / (2 * (1 + nu))
-lambda_0= E * nu / ((1 + nu) * (1 - 2 * nu))
+rho = 1000.0    # density
+E = 5e4        # Young's modulus (Pa)
+nu = 0.3        # Poisson's ratio
+mu = E / (2 * (1 + nu))
+lmbda = E * nu / ((1 + nu) * (1 - 2 * nu))
+# Viscosity (relaxation) parameters
+tau = 1      # relaxation time (s)
+beta = dt / tau
+
 
 # ─── Floor & domain boundaries ─────────────────────────────────────────────
 floor_level    = 0.0
@@ -29,18 +29,21 @@ floor_friction = 0.4
 
 # ─── Single‐hand 2‐link arm params ─────────────────────────────────────────
 L1, L2       = 0.12, 0.10
-theta1       = np.array([0.0], dtype=np.float32)
+theta1       = np.array([np.pi/15], dtype=np.float32)
 theta2       = np.array([0.0],     dtype=np.float32)
 dtheta1      = np.zeros(1, dtype=np.float32)
 dtheta2      = np.zeros(1, dtype=np.float32)
 theta1_rest  = theta1.copy()
 theta2_rest  = theta2.copy()
 
-k1, k2       = 10,10   # compliant springs
-b1, b2       = 0.5, 0.5   # damping
-I1           = L1**2 / 12.0
-I2           = L2**2 / 12.0
+k1, k2       = 15, 50   # compliant springs
+b1, b2       = 0.5,0.5   # damping
+I1           = L1**2 / 3.0
+I2           = L2**2 / 3.0
 
+
+k_c  = 10
+c_c = 2
 # ─── Moving base (x fixed at 0.5, y sinusoidal) ────────────────────────────
 base_x       = 0.5
 y0           = 0.4
@@ -53,7 +56,7 @@ time_t       = 0.0
 roller_radius     = 0.025
 roller_center     = ti.Vector.field(dim, dtype=ti.f32, shape=1)
 roller_velocity   = ti.Vector.field(dim, dtype=ti.f32, shape=1)
-contact_force_vec = ti.Vector.field(dim, dtype=ti.f32, shape=1)
+force_roller      = ti.Vector.field(dim, dtype=ti.f32, shape=1)
 
 # ─── MPM fields ────────────────────────────────────────────────────────────
 x      = ti.Vector.field(dim, dtype=ti.f32, shape=n_particles)
@@ -66,18 +69,14 @@ grid_m = ti.field(dtype=ti.f32, shape=(n_grid, n_grid))
 
 
 # ─── Neo‐Hookean stress ────────────────────────────────────────────────────
-@ti.func
-def neo_hookean_stress(F_i):
-    J_det = F_i.determinant()
-    FinvT = F_i.inverse().transpose()
-    return mu_0 * (F_i - FinvT) + lambda_0 * ti.log(J_det) * FinvT
-
-
+# @ti.func
+# def neo_hookean_stress(F_i):
+#     J_det = F_i.determinant()
+#     FinvT = F_i.inverse().transpose()
+#     return mu_0 * (F_i - FinvT) + lambda_0 * ti.log(J_det) * FinvT
 PI = 3.141592653589793
 half_radius   = 0.2
 soft_center_x = 0.5
-
-
 # ─── Initialize particles + place roller via FK ────────────────────────────
 @ti.kernel
 def init_mpm():
@@ -99,7 +98,7 @@ def init_mpm():
                              -ti.cos(theta1[0] + theta2[0])]) * L2
     roller_center[0]   = ee
     roller_velocity[0] = ti.Vector.zero(ti.f32, dim)
-    contact_force_vec[0] = ti.Vector.zero(ti.f32, dim)
+    force_roller[0] = ti.Vector.zero(ti.f32, dim)
 
 
 # ─── Particle→Grid (P2G) ──────────────────────────────────────────────────
@@ -108,6 +107,7 @@ def p2g():
     for I in ti.grouped(grid_m):
         grid_v[I] = ti.Vector.zero(ti.f32, dim)
         grid_m[I] = 0.0
+    
     for p in range(n_particles):
         Xp   = x[p] * inv_dx
         base = ti.cast(Xp - 0.5, ti.i32)
@@ -115,20 +115,26 @@ def p2g():
         w    = [0.5 * (1.5 - fx)**2,
                 0.75 - (fx - 1.0)**2,
                 0.5 * (fx - 0.5)**2]
-        stress = (-dt * p_vol * 4 * inv_dx * inv_dx) * neo_hookean_stress(F[p])
-        affine = stress + p_mass * C[p]
+        
+        mass_p = rho * (dx * 0.5)**2
+        Jp = F[p].determinant()
+        stress = mu * (F[p] - F[p].inverse().transpose()) + lmbda * ti.log(Jp) * F[p].inverse().transpose()
+        stress = - (dt * inv_dx * inv_dx) * stress * mass_p
+
+        # stress = (-dt * p_vol * 4 * inv_dx * inv_dx) * neo_hookean_stress(F[p])
+        # affine = stress + p_mass * C[p]
         for i, j in ti.static(ti.ndrange(3, 3)):
             offs = ti.Vector([i, j])
             dpos = (offs.cast(ti.f32) - fx) * dx
             wt   = w[i].x * w[j].y
-            grid_v[base + offs] += wt * (p_mass * v[p] + affine @ dpos)
-            grid_m[base + offs] += wt * p_mass
+            grid_v[base + offs] += wt * (mass_p * v[p] + stress @ dpos)
+            grid_m[base + offs] += wt * mass_p
 
 
 # ─── Grid forces & contact detect (normal‐only sliding) ────────────────────
 @ti.kernel
 def apply_grid_forces_and_detect():
-    contact_force_vec[0] = ti.Vector.zero(ti.f32, dim)
+    force_roller[0] = ti.Vector.zero(ti.f32, dim)
     for I in ti.grouped(grid_m):
         m = grid_m[I]
         if m > 0:
@@ -138,7 +144,9 @@ def apply_grid_forces_and_detect():
 
             # Roller: enforce only normal component
             rel = pos - roller_center[0]
+            dist = rel.norm()
             if rel.norm() < roller_radius:
+                
                 rv     = roller_velocity[0]
                 n      = rel.normalized()
                 v_norm = n * n.dot(rv)
@@ -146,7 +154,17 @@ def apply_grid_forces_and_detect():
                 v_new  = v_tan + v_norm
                 delta_v= v_new - v_old
                 f_imp  = m * delta_v / dt
-                contact_force_vec[0] += f_imp
+                force_roller[0] += f_imp
+
+                # n = rel.normalized()
+                # penetration = roller_radius - dist
+                # # relative velocity at grid node
+                # v_rel = grid_v[I] / m - roller_velocity[0]
+                # # spring–damper contact
+                # f_c = k_c * penetration * n - c_c * v_rel.dot(n) * n
+                # # distribute force to grid
+                # grid_v[I] += dt * f_c
+                # force_roller[0] -= f_c
 
             # Floor: clamp vertical AND horizontal for nodes touching floor
             if pos.y < floor_level + dx:
@@ -204,6 +222,12 @@ def g2p():
             v[p].y = 0
 
         F[p] = (ti.Matrix.identity(ti.f32, dim) + dt * new_C) @ F[p]
+
+        # viscoelastic relaxation
+        U, sig, V = ti.svd(F[p])
+        for d in ti.static(range(2)):
+            sig[d, d] = ti.exp((1 - beta) * ti.log(sig[d, d]))
+        F[p] = U @ sig @ V.transpose()
         J[p] = F[p].determinant()
 
 
@@ -212,11 +236,11 @@ def update_base_and_arm():
     global time_t, base_y, theta1, theta2, dtheta1, dtheta2
 
     # 1) Advance time and update vertical base_y
-    time_t += dt * 15
+    time_t += dt 
     base_y = y0 + A * np.cos(ω * time_t)
 
     # 2) Read contact force (2D) from MPM kernel
-    Fc   = contact_force_vec[0].to_numpy()
+    Fc   = force_roller[0].to_numpy()
     base = np.array([base_x, base_y], dtype=np.float32)
 
     # 3) Forward kinematics (0 rad = downward)
@@ -273,7 +297,7 @@ while gui.running:
     gui.circle(base_pt, radius=4, color=0xFF0000)
     gui.circle(j2,      radius=4, color=0xFF0000)
     gui.circle(ee,      radius=int(roller_radius * 512), color=0xFF0000)
-    gui.text(f'Time: {time_t}   '
-             f'Force: {contact_force_vec[0]} N',
+    gui.text(f'Phase: {"Rolling"}   '
+             f'Force: {force_roller[0]} N',
              pos=(0.02, 0.95), color=0xFFFFFF)
     gui.show()
