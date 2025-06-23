@@ -41,10 +41,10 @@ class Render:
          # --- Floor mesh ---
         floor_size = 2.0
         vs = np.array([
-            [ floor_size,  floor_size, 0],
-            [-floor_size,  floor_size, 0],
-            [-floor_size, -floor_size, 0],
-            [ floor_size, -floor_size, 0]
+            [ floor_size, 0, floor_size],
+            [-floor_size, 0, floor_size],
+            [-floor_size, 0, -floor_size],
+            [ floor_size, 0, -floor_size]
         ], dtype=np.float32)
         fs = np.array([[0, 1, 2], [0, 2, 3]], dtype=np.int32)
         floor_tm = trimesh.Trimesh(vertices=vs, faces=fs)
@@ -197,7 +197,7 @@ def substep():
 @ti.kernel
 def init():
     for i in range(n_particles):
-        F_x[i] = ti.Vector([ti.random() for i in range(dim)]) * 0.4 + 0.15
+        F_x[i] = ti.Vector([ti.random() for i in range(dim)]) * 0.4 + 0.5
         F_J[i] = 1
 
 
