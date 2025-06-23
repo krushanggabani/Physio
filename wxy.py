@@ -17,7 +17,7 @@ ti.init(arch=ti.vulkan, debug=False, fast_math=True)
 class Config:
     # Simulation dimensions
     dim: int = 3
-    n_particles: int = 50000
+    n_particles: int = 9000
     n_grid: int = 32
 
     # Time stepping
@@ -96,7 +96,7 @@ class MPM3DSim:
         self.I1 = self.L1**2 / 12.0
         self.I2 = self.L2**2 / 12.0
 
-        self.base_x , self.base_y , self.base_z = 0.0,0.0,0.0
+        self.base_x , self.base_y , self.base_z = 0.15,0.150,0.0
         self.z0 = 0.5
         self.A , self.w  = 0.1,1
         self.base_z = self.z0
@@ -124,7 +124,7 @@ class MPM3DSim:
                 r * ti.cos(phi),
                 r * ti.sin(phi) * ti.sin(theta)
             ])
-            self.x[p] = [ti.random() * 0.3 - 0.15, ti.random() * 0.3  - 0.15, ti.random() * 0.2]
+            self.x[p] = [ti.random() * 0.3 , ti.random() * 0.3 , ti.random() * 0.2]
             self.v[p] = ti.Vector.zero(ti.f32, self.dim)
             self.F[p] = ti.Matrix.identity(ti.f32, self.dim)
             self.J[p] = 1.0
@@ -266,8 +266,11 @@ class MPM3DSim:
             self.J[p] = self.F[p].determinant()
 
     def fk(self):
-        self.time_t += self.dt * 15
-        self.base_z = self.z0 + self.A * np.cos(self.w * self.time_t)
+        self.time_t += self.dt*15
+        self.base_z = self.base_z - 0.001 
+        # self.A * np.cos(self.w * self.time_t)
+
+        print(self.base_z)
         Fc = self.contact_force[0].to_numpy()
         base = np.array([self.base_x, self.base_y, self.base_z], dtype=np.float32)
 
@@ -406,6 +409,8 @@ class Renderer3D:
         j2 = base_pt + np.array([np.sin(sim.theta1[0]), 0, -np.cos(sim.theta1[0])]) * sim.L1
         ee = sim.roller_center[0].to_numpy()
 
+
+        print(base_pt)
         mesh1,T1 = add_cylinder(base_pt, j2, sim.roller_radius, [0, 0, 0.3, 1])
         mesh2,T2 = add_cylinder(j2, ee, sim.roller_radius, [0, 0, 0.3, 1])
         mesh3,T3 = add_roller(ee,sim.roller_radius)
@@ -416,13 +421,23 @@ class Renderer3D:
                 self.scene,
                 use_raymond_lighting=True,
                 run_in_thread=True,
-                fullscreen=True,
                 window_title="Robot Tissue Interaction",
-                viewport_size=(1920,1080)
             )
-            time.sleep(0.001)
 
-        cloud = pyrender.Mesh.from_points(pts, colors=cols)
+        N = len(pts)                             
+        sphere_tm = trimesh.creation.uv_sphere(radius=0.002)
+        RGBA = np.array([60, 160, 255, 255], dtype=np.uint8)   # pale blue
+        sphere_tm.visual.vertex_colors = np.tile(RGBA, (sphere_tm.vertices.shape[0], 1))
+
+        # transforms: (N,4,4)  float32  identity with translated origin
+        tfs = np.repeat(np.eye(4, dtype=np.float32)[None, :, :], N, axis=0)
+        tfs[:, :3, 3] = pts.astype(np.float32)            # copy XYZ
+
+        cloud = pyrender.Mesh.from_trimesh(sphere_tm, poses=tfs, smooth=False)
+
+        # cloud = pyrender.Mesh.from_points(pts, colors=cols)
+
+
         # self.box_pose[:3,3] = box_pose
         with self.viewer.render_lock:
             if self.object_node is not None:
