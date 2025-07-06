@@ -37,7 +37,7 @@ theta1_rest  = theta1.copy()
 theta2_rest  = theta2.copy()
 
 k1, k2       = 10,10   # compliant springs
-b1, b2       = 0.5, 0.5   # damping
+b1, b2       = 0.2, 0.25   # damping
 I1           = L1**2 / 12.0
 I2           = L2**2 / 12.0
 

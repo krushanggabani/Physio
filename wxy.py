@@ -10,6 +10,9 @@ import time
 np.infty = np.inf
 
 
+
+
+
 # Initialize Taichi
 ti.init(arch=ti.vulkan, debug=False, fast_math=True)
 
@@ -24,7 +27,7 @@ class Config:
     dt: float = 1e-4
 
     # Neo‐Hookean material properties
-    E: float = 0.1e4
+    E: float = 0.185e4
     nu: float = 0.2
 
     # Environment
@@ -48,6 +51,45 @@ cfg.p_mass   = cfg.p_rho * cfg.p_vol
 cfg.mu_0     = cfg.E / (2 * (1 + cfg.nu))
 cfg.lambda_0 = cfg.E * cfg.nu / ((1 + cfg.nu) * (1 - 2 * cfg.nu))
 
+
+def compute_grid_resolutions(num_points: int, size: tuple[float, float, float]) -> tuple[int, int, int]:
+    """
+    Compute (#cells_x, #cells_y, #cells_z) so that:
+      cells_x * cells_y * cells_z ≈ num_points
+    and the aspect ratio of cells matches the box dimensions.
+
+    Args:
+      num_points: total number of particles you want to place.
+      size:       (width_x, width_y, width_z) of your box.
+
+    Returns:
+      (res_x, res_y, res_z): integers giving the number of grid cells along each axis.
+    """
+    sx, sy, sz = size
+    volume = sx * sy * sz
+    # volume of each voxel ≈ total_volume / num_points
+    cell_vol = volume / num_points
+    # edge length of a cube of that volume
+    cell_edge = cell_vol ** (1/3)
+    # number of cells along each axis
+    res_x = math.ceil(sx / cell_edge)
+    res_y = math.ceil(sy / cell_edge)
+    res_z = math.ceil(sz / cell_edge)
+    return res_x, res_y, res_z
+
+
+# example
+N = 9000
+box_size = (0.3, 0.3, 0.2)
+res_x, res_y, res_z = compute_grid_resolutions(N, box_size)
+print(f"Grid resolution: {res_x} × {res_y} × {res_z} = {res_x*res_y*res_z} cells")
+
+cfg.n_particles = res_x*res_y*res_z
+
+
+cell_size_x = box_size[0] / res_x
+cell_size_y = box_size[1] / res_y
+cell_size_z = box_size[2] / res_z
 
 @ti.data_oriented
 class MPM3DSim:
@@ -98,7 +140,7 @@ class MPM3DSim:
 
         self.base_x , self.base_y , self.base_z = 0.15,0.150,0.0
         self.z0 = 0.5
-        self.A , self.w  = 0.1,1
+        self.A , self.w  = 0.2,2.0
         self.base_z = self.z0
         self.time_t = 0.0
 
@@ -115,16 +157,27 @@ class MPM3DSim:
     def init(self):
         # Initialize particles in a sphere and set roller at origin
         for p in range(self.n_particles):
-            u, v, w = ti.random(), ti.random(), ti.random()
-            r = cfg.soft_radius * u ** (1/3)
-            theta = math.pi * v
-            phi = ti.acos(2*w - 1)
+            # u, v, w = ti.random(), ti.random(), ti.random()
+            # r = cfg.soft_radius * u ** (1/3)
+            # theta = math.pi * v
+            # phi = ti.acos(2*w - 1)
+            # self.x[p] = ti.Vector([
+            #     r * ti.sin(phi) * ti.cos(theta),
+            #     r * ti.cos(phi),
+            #     r * ti.sin(phi) * ti.sin(theta)
+            # ])
+            # self.x[p] = [ti.random() * 0.3 , ti.random() * 0.3 , ti.random() * 0.2]
+
+            i = p % res_x
+            j = (p // res_x) % res_y
+            k = p // (res_x * res_y)
+            # place in the center of each cell
             self.x[p] = ti.Vector([
-                r * ti.sin(phi) * ti.cos(theta),
-                r * ti.cos(phi),
-                r * ti.sin(phi) * ti.sin(theta)
+                (i + 0.5) * cell_size_x,
+                (j + 0.5) * cell_size_y,
+                (k + 0.5) * cell_size_z,
             ])
-            self.x[p] = [ti.random() * 0.3 , ti.random() * 0.3 , ti.random() * 0.2]
+
             self.v[p] = ti.Vector.zero(ti.f32, self.dim)
             self.F[p] = ti.Matrix.identity(ti.f32, self.dim)
             self.J[p] = 1.0
@@ -267,10 +320,9 @@ class MPM3DSim:
 
     def fk(self):
         self.time_t += self.dt*15
-        self.base_z = self.base_z - 0.001 
-        # self.A * np.cos(self.w * self.time_t)
+        self.base_z = self.z0 + self.A * np.cos(self.w * self.time_t)
 
-        print(self.base_z)
+        # print(self.base_z)
         Fc = self.contact_force[0].to_numpy()
         base = np.array([self.base_x, self.base_y, self.base_z], dtype=np.float32)
 
@@ -410,7 +462,7 @@ class Renderer3D:
         ee = sim.roller_center[0].to_numpy()
 
 
-        print(base_pt)
+        # print(base_pt)
         mesh1,T1 = add_cylinder(base_pt, j2, sim.roller_radius, [0, 0, 0.3, 1])
         mesh2,T2 = add_cylinder(j2, ee, sim.roller_radius, [0, 0, 0.3, 1])
         mesh3,T3 = add_roller(ee,sim.roller_radius)
@@ -470,9 +522,11 @@ if __name__ == "__main__":
     time.sleep(1)
     print("Init")
 
-    for _ in range(100):
-        sim.step(n_substeps=15)
+    for _ in range(1000):
+        sim.step(n_substeps=25)
+
+        # ti.profiler_print()
 
         renderer.render(sim)
-        time.sleep(1)
-        print("updated")
+        # time.sleep(1)
+        # print("updated")

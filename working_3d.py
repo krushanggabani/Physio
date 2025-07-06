@@ -12,7 +12,7 @@ ti.init(arch=ti.vulkan)
 
 # ─── Simulation parameters ─────────────────────────────────────────────────
 dim         = 3
-n_particles = 40000
+n_particles = 50000
 n_grid      = 64
 dx          = 1.0 / n_grid
 inv_dx      = float(n_grid)
