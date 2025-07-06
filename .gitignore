@@ -5,11 +5,11 @@ physioenv/
 *.egg-info/
 
 # Ignoring specified data directories
-data/
-video/
+# data/
+# video/
 
 
 # taichi_examples/
-softmac/
+# softmac/
 __pycache__/
 
