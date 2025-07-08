@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import taichi as ti
-import pyrender
+import pyvista as pv
 import trimesh
 import time
 
@@ -52,20 +52,6 @@ cfg.mu_0     = cfg.E / (2 * (1 + cfg.nu))
 cfg.lambda_0 = cfg.E * cfg.nu / ((1 + cfg.nu) * (1 - 2 * cfg.nu))
 
 
-
-
-# example
-# N = 9000
-# box_size = (0.3, 0.3, 0.2)
-# res_x, res_y, res_z = compute_grid_resolutions(N, box_size)
-# print(f"Grid resolution: {res_x} × {res_y} × {res_z} = {res_x*res_y*res_z} cells")
-
-# cfg.n_particles = res_x*res_y*res_z
-
-
-# cell_size_x = box_size[0] / res_x
-# cell_size_y = box_size[1] / res_y
-# cell_size_z = box_size[2] / res_z
 
 @ti.data_oriented
 class MPM3DSim:
@@ -142,7 +128,17 @@ class MPM3DSim:
                 r * ti.cos(phi),
                 r * ti.sin(phi) * ti.sin(theta)
             ])
-            # self.x[p] = [ti.random() * 0.3 , ti.random() * 0.3 , ti.random() * 0.2]
+            self.x[p] = [ti.random() * 0.3 , ti.random() * 0.3 , ti.random() * 0.2]
+
+            # i = p % res_x
+            # j = (p // res_x) % res_y
+            # k = p // (res_x * res_y)
+            # # place in the center of each cell
+            # self.x[p] = ti.Vector([
+            #     (i + 0.5) * cell_size_x,
+            #     (j + 0.5) * cell_size_y,
+            #     (k + 0.5) * cell_size_z,
+            # ])
 
             self.v[p] = ti.Vector.zero(ti.f32, self.dim)
             self.F[p] = ti.Matrix.identity(ti.f32, self.dim)
@@ -199,12 +195,6 @@ class MPM3DSim:
                     weight *= w[offset[d]][d]
 
                 idx = base + offset
-
-                if 0 <= idx[0] < self.n_grid and 0 <= idx[1] < self.n_grid and 0 <= idx[2] < self.n_grid:
-                    pass
-                else:
-                    print(f"set idx={idx} base={base}")
-
                 self.grid_v[idx] += weight * (self.p_mass * self.v[p] + affine @ dpos)
                 self.grid_m[idx] += weight * self.p_mass
 
@@ -335,160 +325,102 @@ class MPM3DSim:
             self.substep()
 
 
-# Utility: build combined yaw (around Y-axis) and pitch (around X-axis) rotation matrix
-def rotation_matrix(yaw: float, pitch: float) -> np.ndarray:
-    yaw = math.radians(yaw)
-    pitch = math.radians(pitch)
-    yaw_mat = np.array([
-        [math.cos(yaw), 0, math.sin(yaw)],
-        [0, 1, 0],
-        [-math.sin(yaw), 0, math.cos(yaw)]
-    ], dtype=np.float32)
-    pitch_mat = np.array([
-        [1, 0, 0],
-        [0, math.cos(pitch), -math.sin(pitch)],
-        [0, math.sin(pitch),  math.cos(pitch)]
-    ], dtype=np.float32)
-    return yaw_mat @ pitch_mat
 
-
-def add_cylinder(start, end, radius, color):
-    vec = end - start
-    length = np.linalg.norm(vec)
-    if length < 1e-7:
-        return
-    center = (start + end) / 2
-    z = vec / length
-    v = np.cross([0, 0, 1], z)
-    c = np.dot([0, 0, 1], z)
-    s = np.linalg.norm(v)
-    if s < 1e-7:
-        R = np.eye(3)
-    else:
-        vx = np.array([
-            [0, -v[2], v[1]],
-            [v[2], 0, -v[0]],
-            [-v[1], v[0], 0]
-        ])
-        R = np.eye(3) + vx + vx @ vx * ((1 - c) / (s**2))
-    T = np.eye(4)
-    T[:3, :3] = R
-    T[:3, 3] = center
-    cyl = trimesh.creation.cylinder(radius=radius, height=length, sections=12)
-    mesh = pyrender.Mesh.from_trimesh(cyl, smooth=False, material=pyrender.MetallicRoughnessMaterial(baseColorFactor=color))
-    return mesh , T
-
-
-def add_roller(ee,radius):
-    
-    sphere = trimesh.creation.icosphere(subdivisions=3, radius=radius)
-    T = np.eye(4)
-    T[:3, 3] = ee
-    
-    mesh = pyrender.Mesh.from_trimesh(sphere, smooth=False, material=pyrender.MetallicRoughnessMaterial(baseColorFactor=[1, 0, 0, 1]))
-    return mesh , T
 
 class Renderer3D:
-    def __init__(self, sim: MPM3DSim):
-        # Perspective camera
-        # Perspective camera (field-of-view 30°)
-        self.camera = pyrender.PerspectiveCamera(yfov=np.pi/6, aspectRatio=1.0)
-        # Build camera pose (translation + orientation)
-        self.camera_pose = np.eye(4, dtype=np.float32)
-        self.camera_pose[:3, 3] = [0, -2.7, 2]
-        self.camera_pose[:3, :3] = rotation_matrix(0, 60)
+    def __init__(self,sim: MPM3DSim):
+        self.sim = sim
+        self.plotter = pv.Plotter(window_size=(800, 600))
+        self.plotter.add_axes()
+        self.plotter.set_background("white")
+
+        # Floor
+        self.floor = pv.Cube(center=(0, 0, -0.005), x_length=2, y_length=2, z_length=0.01)
+        self.plotter.add_mesh(self.floor, color='lightgray')
+
+        # # Point cloud initialization
+        # self.pcd = pv.PolyData(sim.x.to_numpy())
+        # self.cloud_actor = self.plotter.add_mesh(self.pcd, color='hotpink', point_size=5, render_points_as_spheres=True)
+
+        self.solid_mesh = pv.Sphere(radius=0.01).triangulate()
+        self.mesh_actor = self.plotter.add_mesh(self.solid_mesh, color='hotpink', opacity=1.0)
 
 
-        # Light pitched down 30°
-        self.light = pyrender.DirectionalLight(color=np.ones(3), intensity=2.0)
-        self.light_pose = np.eye(4, dtype=np.float32)
-        self.light_pose[:3,:3] = rotation_matrix(0, -30)
+        # Robot arm placeholders (cylinders and roller sphere)
+        self.link1 = pv.Cylinder(center=(0, 0, 0), direction=(0, 0, 1), radius=0.005, height=1.0)
+        self.link2 = pv.Cylinder(center=(0, 0, 0), direction=(0, 0, 1), radius=0.005, height=1.0)
+        self.roller = pv.Sphere(center=(0, 0, 0), radius=sim.roller_radius)
 
-        # Create a flat floor mesh in the X-Y plane at Z=0
-        floor_size = 2.0
-        vs = np.array([
-            [ floor_size,  floor_size, 0],
-            [-floor_size,  floor_size, 0],
-            [-floor_size, -floor_size, 0],
-            [ floor_size, -floor_size, 0]
-        ], dtype=np.float32)
-        fs = np.array([[0, 1, 2], [0, 2, 3]], dtype=np.int32)
-        floor_trimesh = trimesh.Trimesh(vertices=vs, faces=fs)
-        self.floor_mesh = pyrender.Mesh.from_trimesh(floor_trimesh, smooth=False)
+        self.link1_actor = self.plotter.add_mesh(self.link1, color='blue')
+        self.link2_actor = self.plotter.add_mesh(self.link2, color='blue')
+        self.roller_actor = self.plotter.add_mesh(self.roller, color='red')
 
-        self.scene = pyrender.Scene()
-        self.floor_node = self.scene.add(self.floor_mesh)
-        self.cam_node   = self.scene.add(self.camera, pose=self.camera_pose)
-        self.light_node = self.scene.add(self.light,   pose=self.light_pose)
-        self.viewer     = None
-        self.robot_node1 = None
-        self.robot_node2 = None
-        self.robot_node3 = None
+        # Time text
+        self.text_actor = self.plotter.add_text("t = 0.0000s", position='upper_left', font_size=14)
 
-        pts = sim.x.to_numpy()
-        N = len(pts)                             
-        sphere_tm = trimesh.creation.uv_sphere(radius=0.002)
-        RGBA = np.array([60, 160, 255, 255], dtype=np.uint8)   # pale blue
-        sphere_tm.visual.vertex_colors = np.tile(RGBA, (sphere_tm.vertices.shape[0], 1))
+        self.plotter.show(auto_close=False, interactive_update=True)
 
-        # transforms: (N,4,4)  float32  identity with translated origin
-        tfs = np.repeat(np.eye(4, dtype=np.float32)[None, :, :], N, axis=0)
-        tfs[:, :3, 3] = pts.astype(np.float32)            # copy XYZ
+    def update_cylinder(self, cyl: pv.PolyData, start, end):
+        center = (start + end) / 2
+        direction = end - start
+        height = np.linalg.norm(direction)
+        if height < 1e-6:
+            direction = np.array([0, 0, 1])
+            height = 1e-6
 
-        cloud = pyrender.Mesh.from_trimesh(sphere_tm, poses=tfs, smooth=False)
-        self.object_node = self.scene.add(cloud, name="particles")
-
-    def render(self, sim: MPM3DSim):
-        pts = sim.x.to_numpy()
-        cols = ((pts + 1.0) * 0.5).astype(np.float32)
-
-        base_pt = np.array([sim.base_x, sim.base_y, sim.base_z], dtype=np.float32)
-        j2 = base_pt + np.array([np.sin(sim.theta1[0]), 0, -np.cos(sim.theta1[0])]) * sim.L1
-        ee = sim.roller_center[0].to_numpy()
+        new_cyl = pv.Cylinder(center=center, direction=direction, radius=0.005, height=height)
+        cyl.deep_copy(new_cyl)  # <- this replaces the old geometry
 
 
-        # print(base_pt)
-        mesh1,T1 = add_cylinder(base_pt, j2, sim.roller_radius, [0, 0, 0.3, 1])
-        mesh2,T2 = add_cylinder(j2, ee, sim.roller_radius, [0, 0, 0.3, 1])
-        mesh3,T3 = add_roller(ee,sim.roller_radius)
-        
 
-        if self.viewer is None:
-            self.viewer = pyrender.Viewer(
-                self.scene,
-                use_raymond_lighting=True,
-                run_in_thread=True,
-                window_title="Robot Tissue Interaction",
-            )
+    def render(self, step_i=0):
+        # pts = self.sim.x.to_numpy()
 
-        N = len(pts)                             
-        sphere_tm = trimesh.creation.uv_sphere(radius=0.002)
-        RGBA = np.array([60, 160, 255, 255], dtype=np.uint8)   # pale blue
-        sphere_tm.visual.vertex_colors = np.tile(RGBA, (sphere_tm.vertices.shape[0], 1))
+        # # Update point cloud
+        # self.pcd.points = pts
+        # self.cloud_actor.mapper.Update()
 
-        # transforms: (N,4,4)  float32  identity with translated origin
-        tfs = np.repeat(np.eye(4, dtype=np.float32)[None, :, :], N, axis=0)
-        tfs[:, :3, 3] = pts.astype(np.float32)            # copy XYZ
+        pts = self.sim.x.to_numpy()
+        cloud = pv.PolyData(pts).clean()
 
-        cloud = pyrender.Mesh.from_trimesh(sphere_tm, poses=tfs, smooth=False)
+        try:
+            volume = cloud.delaunay_3d(alpha=1)
+            shell = volume.extract_geometry()
+            shell = shell.smooth(n_iter=10)
+            self.solid_mesh.deep_copy(shell)
+        except Exception as e:
+            print(f"[Warning] Failed surface reconstruction: {e}")
 
-        # cloud = pyrender.Mesh.from_points(pts, colors=cols)
+        # # Remove previous robot links
+        # for act in self.link_actors:
+        #     self.plotter.remove_actor(act)
+        # self.link_actors = []
+
+        # Robot geometry
+        base_pt = np.array([self.sim.base_x, self.sim.base_y, self.sim.base_z], dtype=np.float32)
+        j2 = base_pt + np.array([np.sin(self.sim.theta1[0]), 0, -np.cos(self.sim.theta1[0])]) * self.sim.L1
+        ee = self.sim.roller_center[0].to_numpy()
+
+        # # Add links and roller as cylinders/spheres
+        # self.link_actors.append(self.plotter.add_mesh(pv.Cylinder(center=(base_pt + j2) / 2, direction=j2 - base_pt, radius=0.005, height=np.linalg.norm(j2 - base_pt)), color='blue'))
+        # self.link_actors.append(self.plotter.add_mesh(pv.Cylinder(center=(j2 + ee) / 2, direction=ee - j2, radius=0.005, height=np.linalg.norm(ee - j2)), color='blue'))
+        # self.link_actors.append(self.plotter.add_mesh(pv.Sphere(center=ee, radius=self.sim.roller_radius), color='red'))
+
+         # Update robot links
+        self.update_cylinder(self.link1, base_pt, j2)
+        self.update_cylinder(self.link2, j2, ee)
+
+        # Update roller
+        # self.roller.center = ee
+
+        # Time display
+        t = step_i *1e-4
+        # self.text_actor.SetInput(f"t = {t:.4f}s")
+        self.text_actor.SetText(2, f"t = {t:.4f}s")
 
 
-        # self.box_pose[:3,3] = box_pose
-        with self.viewer.render_lock:
-            # if self.object_node is not None:
-                # self.scene.remove_node(self.object_node)
-                # self.scene.remove_node(self.robot_node1)
-                # self.scene.remove_node(self.robot_node2)
-                # self.scene.remove_node(self.robot_node3)
 
-            self.object_node.mesh = cloud
-            # self.robot_node1 = self.scene.add(mesh1,pose=T1)
-            # self.robot_node2 = self.scene.add(mesh2,pose=T2)
-            # self.robot_node3 = self.scene.add(mesh3,pose=T3)
-            # self.box_node   = self.scene.add(self.box_mesh, pose=self.box_pose)
-        time.sleep(1e-3)
+        self.plotter.update()
 
 
         
@@ -503,12 +435,15 @@ if __name__ == "__main__":
     sim = MPM3DSim(cfg)
     sim.init()
     renderer = Renderer3D(sim)
-    renderer.render(sim)
+    renderer.render(step_i=1)
     time.sleep(1)
     print("Init")
 
-    for _ in range(1):
-        sim.step(n_substeps=5)
+    for i in range(1000):
+        sim.step(n_substeps=25)
 
+        # ti.profiler_print()
 
-        renderer.render(sim)
+        renderer.render(step_i=i)
+        # time.sleep(1)
+        # print("updated")
