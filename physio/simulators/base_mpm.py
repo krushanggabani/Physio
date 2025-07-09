@@ -53,7 +53,17 @@ class BASE_MPM:
         self.grid_m  = ti.field(dtype=ti.f32, shape=(g, g, g))
 
         # initialize particles
+        self.roller_radius = 0.025
+        self.roller_mass     =0.1
+        self.restitution = 0.5
+
+        self.roller_center   = ti.Vector.field(d, dtype=self.dtype, shape=())
+        self.roller_velocity = ti.Vector.field(d, dtype=self.dtype, shape=())
+        self.contact_force   = ti.Vector.field(d, dtype=self.dtype, shape=())
+
+        # initialize
         self._init_particles()
+        self.init_roller()
 
 
     @ti.kernel
@@ -86,6 +96,17 @@ class BASE_MPM:
             self.F[p] = ti.Matrix.identity(self.dtype, self.dim)
             self.J[p] = 1.0
             self.C[p] = ti.Matrix.zero(self.dtype, self.dim, self.dim)
+
+        
+    @ti.kernel
+    def init_roller(self):
+        # place roller above soft body
+        # pos = ti.Vector(list(self.cfg.roller_init_pos))
+        pos = ti.Vector([0.5 , 0.5, 0.5])
+        self.roller_center[None] = pos
+        self.roller_velocity[None] = ti.Vector.zero(self.dtype, self.dim)
+
+
 
     @ti.func
     def neo_hookean(self, F):
@@ -135,15 +156,26 @@ class BASE_MPM:
                 self.grid_v[idx] += weight * (self.p_mass * self.v[p] + affine @ dpos)
                 self.grid_m[idx] += weight * self.p_mass
 
+    @ti.func
+    def sdf_sphere(x, center, radius):
+        # x, center are ti.Vector, radius is scalar
+        return (x - center).norm() - radius
+
+
+ 
 
     @ti.kernel 
     def grid_op(self):
+        self.contact_force[None] = ti.Vector.zero(ti.f32, self.dim)
+        
+
         for I in ti.grouped(self.grid_m):
             m = self.grid_m[I]
             if m > 0:
                 v_old = self.grid_v[I] / m
                 v_new = v_old + self.dt * self.g
-                pos = I.cast(self.dtype) * self.dx
+                pos = I.cast(self.dtype) * self.dx  
+                   
 
                 # impulse-based floor collision
                 if pos[2] < self.floor_level + self.dx:
@@ -174,6 +206,33 @@ class BASE_MPM:
                     if pos[d] < self.dx or pos[d] > 1 - self.dx:
                         v_new[d] = 0.0
                 self.grid_v[I] = v_new * m
+
+        r_pos = self.roller_center[None]
+        r_vel = self.roller_velocity[None]
+
+        for p in range(self.n_particles):
+
+            pos =  self.x[p]
+            dist = self.sdf_sphere(pos,r_pos,self.roller_radius)
+
+            if dist <=0:
+                rel = pos - r_pos
+                
+                input_v = self.v[p]-r_vel
+                vn = input_v.dot(n)
+
+                if vn < 0:
+                    
+
+
+#   jn = -(1+self.restitution)*vn*self.p_mass
+#                     self.v[p] += (jn/m*self.p_mass)*n
+#                     # friction
+#                     vt = self.v[p] - self.v[p].dot(n)*n
+#                     jt = -vt*self.friction
+#                     if jt.norm()>jn*self.friction:
+#                         jt = jt*(jn*self.friction/jt.norm())
+#                     self.v[p] += jt
 
 
     @ti.kernel
@@ -229,8 +288,11 @@ class BASE_MPM:
             self.J[p] = self.F[p].determinant()
     
     def fk(self):
-        pass
-
+        v = self.roller_velocity[None]
+        v += self.dt*self.g
+        v += self.contact_force[None] / self.roller_mass
+        self.roller_velocity[None] = v
+        self.roller_center[None] += v*self.dt
 
     def step(self,n_substeps:int = 1):
         

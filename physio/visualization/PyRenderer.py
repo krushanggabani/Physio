@@ -95,10 +95,16 @@ class PyRenderer3D:
         self.robot_node3  = None
         self.viewer       = None
 
+        self.robot_center = None
+
 
     def set_particles(self,particles):
         self.particles = particles
         self.particles_color = ((particles + 1.0) * 0.5).astype(np.float32)
+
+
+    def update_robot(self,robot):
+        self.robot_center = robot
 
     def _reconstruct_solid(self):
         """
@@ -130,12 +136,26 @@ class PyRenderer3D:
             tfs[:, :3, 3] = self.particles.astype(np.float32) 
             cloud = pyrender.Mesh.from_trimesh(sphere_tm, poses=tfs, smooth=False)
         
+        sphere = trimesh.creation.icosphere(subdivisions=3, radius=0.025)
+        T = np.eye(4)
+        T[:3, 3] = self.robot_center
+    
+        mesh = pyrender.Mesh.from_trimesh(sphere, smooth=False, material=pyrender.MetallicRoughnessMaterial(baseColorFactor=[1, 0, 0, 1]))
 
         with self.viewer.render_lock:
+            
             if self.object_node is None:
                 self.object_node = self.scene.add(cloud, name="particles")
+                
             else:
                 self.object_node.mesh = cloud
+            
+
+            if self.robot_node1 is None:
+                self.robot_node1 = self.scene.add(mesh,pose=T)
+            else:
+                self.scene.remove_node(self.robot_node1)
+                self.robot_node1 = self.scene.add(mesh,pose=T)
 
 
         # Throttle

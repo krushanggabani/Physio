@@ -20,7 +20,7 @@ from physio.simulators.base_mpm import BASE_MPM
 from physio.visualization.PyRenderer import PyRenderer3D
 
 
-ti.init(arch=ti.gpu, debug=False, fast_math=True, device_memory_GB=9)
+ti.init(arch=ti.gpu, kernel_profiler=True, debug=False, fast_math=True, device_memory_GB=9)
 
 
 @ti.data_oriented
@@ -47,8 +47,13 @@ class PhysioEnv:
 
     def step(self,n_substeps=1):
         self.simulator.step(n_substeps)
+        # ti.profiler.print_scoped_profiler_info()
+        # ti.profiler.print_kernel_profiler_info('trace')
+        # ti.profiler.clear_kernel_profiler_info()
 
     def render(self):
         pts = self.simulator.x.to_numpy()
+        robot = self.simulator.roller_center.to_numpy()
         self.renderer.set_particles(pts)
+        self.renderer.update_robot(robot)
         self.renderer.render()
