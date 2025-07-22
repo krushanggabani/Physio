@@ -102,7 +102,7 @@ class BASE_MPM:
     def init_roller(self):
         # place roller above soft body
         # pos = ti.Vector(list(self.cfg.roller_init_pos))
-        pos = ti.Vector([0.5 , 0.5, 0.5])
+        pos = ti.Vector([0.5 , 0.5, 0.3])
         self.roller_center[None] = pos
         self.roller_velocity[None] = ti.Vector.zero(self.dtype, self.dim)
 
@@ -210,18 +210,18 @@ class BASE_MPM:
         r_pos = self.roller_center[None]
         r_vel = self.roller_velocity[None]
 
-        for p in range(self.n_particles):
+        # for p in range(self.n_particles):
 
-            pos =  self.x[p]
-            dist = self.sdf_sphere(pos,r_pos,self.roller_radius)
+        #     pos =  self.x[p]
+        #     dist = self.sdf_sphere(pos,r_pos,self.roller_radius)
 
-            if dist <=0:
-                rel = pos - r_pos
+        #     if dist <=0:
+        #         rel = pos - r_pos
                 
-                input_v = self.v[p]-r_vel
-                vn = input_v.dot(n)
+        #         input_v = self.v[p]-r_vel
+        #         vn = input_v.dot(n)
 
-                if vn < 0:
+        #         if vn < 0:
                     
 
 

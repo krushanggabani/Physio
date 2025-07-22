@@ -32,7 +32,7 @@ grid_m = ti.field(dtype=ti.f32, shape=(n_grid, n_grid))
 @ti.kernel
 def initialize():
     for i in range(n_particles):
-        x[i] = [ti.random() * 0.2 + 0.3, ti.random() * 0.2 + 0.3]
+        x[i] = [ti.random() * 0.2 + 0.3, ti.random() * 0.2 ]
         v[i] = [0, 0]
         F[i] = ti.Matrix.identity(ti.f32, dim)
         C[i] = ti.Matrix.zero(ti.f32, dim, dim)

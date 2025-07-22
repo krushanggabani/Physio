@@ -50,9 +50,9 @@ class Config:
     # --------------------------- Rendering Settings --------------------------
     render_model: str = "PyRender"  # Rendering backend (e.g., "PyRender", "OpenGL")
     solid_mode: str = "solid"       # solid, mesh
-    camera_pose: Tuple[float, float, float] = (0.0, -2.7, 2.0)
+    camera_pose: Tuple[float, float, float] = (0.5, -1.5, 2.0)
     # Camera position in world coordinates (X, Y, Z)
-    camera_rotation: Tuple[float, float] = (0.0, 60.0)
+    camera_rotation: Tuple[float, float] = (0.0, 45.0)
     # Camera orientation: (yaw in degrees, pitch in degrees)
 
     light_pose: Tuple[float, float, float] = (0.0, 0.0, 1.0)

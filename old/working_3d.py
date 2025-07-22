@@ -394,12 +394,12 @@ renderer = Renderer(camera_height=10.0, floor_size=2.0)
 renderer.render(points_np, colors)
 
 
-# for frame in range(1):
-#     for _ in range(10):
-#         p2g()
-#         apply_grid_forces_and_detect()
-#         g2p()
-#         update_base_and_arm()
+for frame in range(1):
+    for _ in range(10):
+        p2g()
+        apply_grid_forces_and_detect()
+        g2p()
+        update_base_and_arm()
     
 
 print("Simulation ended.")
