@@ -146,6 +146,8 @@ ti.init(arch=ti.vulkan)
 
 # ─── Simulation parameters ─────────────────────────────────────────────────
 dim         = 3
+dtype       = ti.f32
+itype       = ti.i32
 n_particles = 9000
 n_grid      = 32
 dx          = 1.0 / n_grid
@@ -161,6 +163,11 @@ E       = 5e3
 nu      = 0.2
 mu_0     = E / (2*(1 + nu))
 lambda_0 = E * nu / ((1 + nu)*(1 - 2*nu))
+coup_softness     = 1.0    # ε in 2.1
+coup_restitution  = 1     # e in 2.3
+coup_friction     = 0.5     # μ in 2.4
+
+
 
 # ─── Floor & domain boundaries ─────────────────────────────────────────────
 floor_level    = 0.0
@@ -169,12 +176,12 @@ floor_friction = 0.4
 
 # ─── Roller & contact fields (single hand) ─────────────────────────────────
 roller_radius     = 0.025
-roller_center     = ti.Vector.field(dim, dtype=ti.f32, shape=())
-roller_velocity   = ti.Vector.field(dim, dtype=ti.f32, shape=())
+roller_center     = ti.Vector.field(dim, dtype=dtype, shape=())
+roller_velocity   = ti.Vector.field(dim, dtype=dtype, shape=())
 
-state          = ti.field(ti.i32, shape=())   # 0=descend, 1=roll
-contact_height = ti.field(ti.f32, shape=())
-contact_force  = ti.field(ti.f32, shape=())
+state          = ti.field(itype, shape=())   # 0=descend, 1=roll
+contact_height = ti.field(dtype, shape=())
+contact_force  = ti.Vector.field(dim, dtype=dtype, shape=())
 
 # ─── Speeds ───────────────────────────────────────────────────────────────
 v_desc = 0.5  # vertical descent m/s
@@ -182,18 +189,21 @@ v_roll = 0.2  # horizontal roll m/s
 
 
 # ─── MPM fields ────────────────────────────────────────────────────────────
-x      = ti.Vector.field(dim, dtype=ti.f32, shape=n_particles)
-v      = ti.Vector.field(dim, dtype=ti.f32, shape=n_particles)
-F      = ti.Matrix.field(dim, dim, dtype=ti.f32, shape=n_particles)
-C      = ti.Matrix.field(dim, dim, dtype=ti.f32, shape=n_particles)
-J      = ti.field(dtype=ti.f32, shape=n_particles)
-grid_v = ti.Vector.field(dim, dtype=ti.f32, shape=(n_grid, n_grid,n_grid))
-grid_m = ti.field(dtype=ti.f32, shape=(n_grid, n_grid,n_grid))
+x      = ti.Vector.field(dim, dtype=dtype, shape=n_particles)
+v      = ti.Vector.field(dim, dtype=dtype, shape=n_particles)
+F      = ti.Matrix.field(dim, dim, dtype=dtype, shape=n_particles)
+C      = ti.Matrix.field(dim, dim, dtype=dtype, shape=n_particles)
+J      = ti.field(dtype=dtype, shape=n_particles)
+grid_v = ti.Vector.field(dim, dtype=dtype, shape=(n_grid, n_grid,n_grid))
+grid_m = ti.field(dtype=dtype, shape=(n_grid, n_grid,n_grid))
 
 
 half_radius   = 0.2
-soft_center = ti.Vector.field(dim, dtype=ti.f32, shape=())
+soft_center = ti.Vector.field(dim, dtype=dtype, shape=())
 soft_center   = ti.Vector([0.5, 0.5, 0.0])
+
+
+d_field = ti.field(dtype=ti.f32, shape=())
 
 # ─── Neo-Hookean stress ───────────────────────────────────────────────────
 @ti.func
@@ -219,14 +229,15 @@ def init_particles():
         
 
         v[p] = ti.Vector([0.0, 0.0, 0.0])
-        F[p] = ti.Matrix.identity(ti.f32, dim)
+        F[p] = ti.Matrix.identity(dtype, dim)
         J[p] = 1.0
-        C[p] = ti.Matrix.zero(ti.f32, dim, dim)
+        C[p] = ti.Matrix.zero(dtype, dim, dim)
 
     state[None]          = 0
     contact_height[None] = 0.0
-    contact_force[None]  = 0.0
-    roller_center[None] = ti.Vector([0.5, 0.5, 0.5])
+    contact_force[None]  = ti.Vector.zero(dtype, dim)
+    roller_center[None] = ti.Vector([0.5, 0.5, 0.3])
+    roller_velocity[None] = ti.Vector.zero(dtype, dim)
 
 
 
@@ -234,12 +245,12 @@ def init_particles():
 @ti.kernel
 def p2g():
     for I in ti.grouped(grid_m):
-        grid_v[I] = ti.Vector.zero(ti.f32, dim)
+        grid_v[I] = ti.Vector.zero(dtype, dim)
         grid_m[I] = 0.0
     for p in range(n_particles):
         Xp   = x[p] * inv_dx
-        base = ti.cast(Xp - 0.5, ti.i32)
-        fx   = Xp - base.cast(ti.f32)
+        base = ti.cast(Xp - 0.5, itype)
+        fx   = Xp - base.cast(dtype)
         w = [0.5 * (1.5 - fx)**2,
              0.75 - (fx - 1.0)**2,
              0.5 * (fx - 0.5)**2]
@@ -248,7 +259,7 @@ def p2g():
 
         for i, j, k in ti.static(ti.ndrange(3, 3, 3)):
             offset = ti.Vector([i, j, k])
-            dpos   = (offset.cast(ti.f32) - fx) * dx
+            dpos   = (offset.cast(dtype) - fx) * dx
             weight = w[i].x * w[j].y * w[k].z
             grid_v[base + offset] += weight * (p_mass * v[p] + affine @ dpos)
             grid_m[base + offset] += weight * p_mass
@@ -260,40 +271,67 @@ def p2g():
 
 # ─── Update roller position ────────────────────────────────────────────────
 def update_roller_position():
-    c = roller_center[None]
-    if state[None] == 0:
-        c.z -= v_desc * dt
-    else:
-        c.x += v_roll * dt
-        c.z = contact_height[None]
-    roller_center[None] = c
+
+    v = roller_velocity[None]
+    v += gravity*dt
+    v += contact_force[None]*dt
+
+    d_field[None] = contact_force[None].norm()
+    if contact_force[None].norm() > 0:
+        v += ti.Vector([0.25,0,0])*dt
+
+    roller_velocity[None] = v
+
+    roller_center[None] += v*dt 
 
 
 #  ─── Grid forces, roller (normal-only), floor, walls, force detect ─────────
 
 @ti.kernel
 def apply_grid_forces_and_detect():
-    contact_force[None] = 0.0
+    contact_force[None] = ti.Vector.zero(dtype, dim)
+    # d_field[None] = 0.0
     for I in ti.grouped(grid_m):
         m = grid_m[I]
         if m > 0:
             v_old = grid_v[I] / m
             v_new = v_old + dt * ti.Vector([0.0, 0.0,-9.8])
-            pos   = I.cast(ti.f32) * dx
+            pos   = I.cast(dtype) * dx
 
             # Roller contact (normal only)
-            if (pos - roller_center[None]).norm() < roller_radius:
-                v_target = ti.Vector.zero(ti.f32, dim)
-                if state[None] == 0:
-                    v_target = ti.Vector([0.0, 0.0,-v_desc])
-                else:
-                    v_target = ti.Vector([v_roll, 0.0, 0.0])
+            d = (pos - roller_center[None]).norm() 
+
+            
+
+            if  d < roller_radius:
+                
+                w_inf  = ti.min(ti.exp(-d*coup_softness),1.0)
+                rel     = v_new - roller_velocity[None]
+
                 n       = (pos - roller_center[None]).normalized()
-                v_norm  = n * (n.dot(v_target))
-                v_tang  = v_old - n * (n.dot(v_old))
-                v_new   = v_tang + v_norm
-                f_imp   = m * (v_new - v_old) / dt
-                contact_force[None] += f_imp.norm()
+                
+                v_n     = rel.dot(n)*n
+                v_t     = rel - v_n * n
+
+
+                # d_field[None] = w_inf
+                if v_n.norm() > 0:
+
+                    v_n_post = -coup_restitution * v_n
+
+                    v_t_mag  = v_t.norm() + 1e-8
+                    max_t = coup_friction * abs(v_n)
+                    v_t_post = v_t.normalized() * ti.max(0 , v_t_mag + max_t)
+
+
+                    rel_post = v_n_post + v_t_post
+                    new_rel  = (1.0 - w_inf) * rel + w_inf * rel_post
+                    v_new    = roller_velocity[None] + new_rel
+
+                    dp       = m*1000 * (v_new - v_old)
+                    contact_force[None] += -(dp/dt)
+                    
+                    
 
             # Floor contact
             if pos.z < floor_level + dx:
@@ -310,26 +348,26 @@ def apply_grid_forces_and_detect():
 
             grid_v[I] = v_new * m
 
-    if state[None] == 0 and contact_force[None] >= 2.0:
-        state[None] = 1
-        contact_height[None] = roller_center[None].z
+    # if state[None] == 0 and contact_force[None] >= 2.0:
+        # state[None] = 1
+        # contact_height[None] = roller_center[None].z
 
 # ─── Grid to Particle (G2P) with boundaries ────────────────────────────────
 @ti.kernel
 def g2p():
     for p in range(n_particles):
         Xp   = x[p] * inv_dx
-        base = ti.cast(Xp - 0.5, ti.i32)
-        fx   = Xp - base.cast(ti.f32)
+        base = ti.cast(Xp - 0.5, itype)
+        fx   = Xp - base.cast(dtype)
         w = [0.5 * (1.5 - fx)**2,
              0.75 - (fx - 1.0)**2,
              0.5 * (fx - 0.5)**2]
 
-        new_v = ti.Vector.zero(ti.f32, dim)
-        new_C = ti.Matrix.zero(ti.f32, dim, dim)
+        new_v = ti.Vector.zero(dtype, dim)
+        new_C = ti.Matrix.zero(dtype, dim, dim)
         for i, j , k in ti.static(ti.ndrange(3, 3, 3)):
             offset = ti.Vector([i, j, k])
-            dpos   = (offset.cast(ti.f32) - fx) * dx
+            dpos   = (offset.cast(dtype) - fx) * dx
             weight = w[i].x * w[j].y * w[k].z
             g_v    = grid_v[base + offset] / grid_m[base + offset]
             new_v  += weight * g_v
@@ -356,7 +394,7 @@ def g2p():
             x[p].y = 1 - dx; v[p].y = 0
 
 
-        F[p] = (ti.Matrix.identity(ti.f32, dim) + dt * new_C) @ F[p]
+        F[p] = (ti.Matrix.identity(dtype, dim) + dt * new_C) @ F[p]
         J[p] = F[p].determinant()
 
 
@@ -376,6 +414,7 @@ while scene.running:
         update_roller_position()
         g2p()
 
+        print("sample d =", d_field[None])
 
 
     pts = x.to_numpy()
